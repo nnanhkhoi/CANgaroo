@@ -2,7 +2,8 @@
 param(
     [string]$MsysRoot,
     [ValidateRange(1, 32)]
-    [int]$Jobs = 4
+    [int]$Jobs = 4,
+    [switch]$RunTests
 )
 
 # Uses an existing MSYS2 MINGW64 toolchain. This script does not download or
@@ -13,7 +14,22 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 $projectRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
-if (-not $MsysRoot) { $MsysRoot = Join-Path $projectRoot 'build/toolchain/msys64' }
+if (-not $MsysRoot) {
+    $candidates = @((Join-Path $projectRoot 'build/toolchain/msys64'), 'C:/msys64')
+    $pathQmake = Get-Command qmake6.exe -ErrorAction SilentlyContinue
+    if ($pathQmake) {
+        $candidates += Split-Path (Split-Path (Split-Path $pathQmake.Source -Parent) -Parent) -Parent
+    }
+    foreach ($candidate in $candidates) {
+        if (Test-Path -LiteralPath (Join-Path $candidate 'mingw64/bin/qmake6.exe') -PathType Leaf) {
+            $MsysRoot = $candidate
+            break
+        }
+    }
+    if (-not $MsysRoot) {
+        throw 'MSYS2 MINGW64 was not found. Supply -MsysRoot C:/path/to/msys64.'
+    }
+}
 $mingwRoot = Join-Path ([IO.Path]::GetFullPath($MsysRoot)) 'mingw64'
 $mingwBin = Join-Path $mingwRoot 'bin'
 $bundleDir = Join-Path $projectRoot 'bin/CANgaroo-Windows'
@@ -21,9 +37,18 @@ $bundleExe = Join-Path $bundleDir 'cangaroo.exe'
 
 function Invoke-Checked {
     param([string]$Tool, [string[]]$ToolArguments)
-    & $Tool @ToolArguments
-    if ($LASTEXITCODE -ne 0) {
-        throw "$Tool failed with exit code $LASTEXITCODE."
+    # Windows PowerShell can turn redirected native stderr warnings into
+    # terminating errors. Native tools report failure through their exit code.
+    $previousPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        & $Tool @ToolArguments
+        $toolExitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousPreference
+    }
+    if ($toolExitCode -ne 0) {
+        throw "$Tool failed with exit code $toolExitCode."
     }
 }
 
@@ -92,6 +117,7 @@ try {
     $env:PKG_CONFIG_LIBDIR = $env:PKG_CONFIG_PATH
     $env:QT_PLUGIN_PATH = Join-Path $mingwRoot 'share/qt6/plugins'
 
+    Write-Host "Using toolchain: $mingwRoot"
     Write-Host 'Building CANgaroo...'
     Push-Location (Join-Path $projectRoot 'src')
     try {
@@ -99,6 +125,18 @@ try {
         Invoke-Checked $make @('-j', "$Jobs")
     } finally {
         Pop-Location
+    }
+
+    if ($RunTests) {
+        Write-Host 'Building and running unit tests...'
+        Push-Location (Join-Path $projectRoot 'tests')
+        try {
+            Invoke-Checked $qmake @('tests.pro', 'CONFIG+=release', 'CONFIG-=debug', 'CONFIG-=debug_and_release')
+            Invoke-Checked $make @('-j', "$Jobs")
+            Invoke-Checked $make @('check')
+        } finally {
+            Pop-Location
+        }
     }
 
     Write-Host "Preparing portable application: $bundleDir"
@@ -128,6 +166,7 @@ try {
         Copy-Item -Destination $exampleDir -Force
     Get-ChildItem -LiteralPath $projectRoot -Filter 'LICENSE*' -File |
         Copy-Item -Destination $bundleDir -Force
+    Copy-Item -LiteralPath (Join-Path $projectRoot 'docs/isotp.md') -Destination $bundleDir -Force
 
     Write-Host 'Resolving runtime DLLs, including Python extension dependencies...'
     Copy-RuntimeDependencies $bundleDir $mingwBin $objdump

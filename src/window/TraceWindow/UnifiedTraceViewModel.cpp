@@ -238,7 +238,14 @@ void UnifiedTraceViewModel::processNewMessages()
         // up here regardless of whether a higher-level protocol decoder consumed
         // or completed it. Decoded protocol summaries belong only in the
         // dedicated UDS/J1939 tabs, handled above.
-        if (m_category == Cat_All) {
+        const bool udsTransport = m_category == Cat_UDS
+            && ((status == DecodeStatus::Consumed && pmsg.protocol == "uds")
+                || (msg.busType() == BusType::CAN && !msg.isRTR() && !msg.isErrorFrame()
+                    && msg.getLength() >= 3 && (msg.getByte(0) >> 4) == 3
+                    && (msg.getByte(0) & 15) <= 2
+                    && ((!msg.isExtended() && msg.getId() >= 0x7E0 && msg.getId() <= 0x7EF)
+                        || (msg.isExtended() && (msg.getId() & 0x1FFF0000u) == 0x18DA0000u))));
+        if (m_category == Cat_All || udsTransport) {
             auto item = std::make_shared<UnifiedTraceItem>(msg, m_rootItem.get());
             uint64_t ts = static_cast<uint64_t>(msg.getFloatTimestamp() * 1000000.0);
             if (m_firstTimestamp == 0) m_firstTimestamp = ts;
@@ -533,7 +540,7 @@ QVariant UnifiedTraceViewModel::data_DisplayRole(const QModelIndex &index, [[may
                     LinFrame *linFrame = backend()->findLinFrame(msg);
                     return linFrame ? linFrame->name() : QStringLiteral("");
                 }
-                if (item->parentItem() != m_rootItem.get()) {
+                if (item->parentItem() != m_rootItem.get() || m_category == Cat_UDS) {
                     uint8_t firstByte = msg.getByte(0);
                     uint8_t type = (firstByte >> 4) & 0x0F;
                     if (type == 0x0) return tr("[tp] Single Frame");

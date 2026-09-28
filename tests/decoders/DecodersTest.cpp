@@ -34,12 +34,15 @@
 #include "decoders/J1939Decoder.h"
 #include "decoders/UdsDecoder.h"
 #include "decoders/ProtocolManager.h"
+#include "decoders/IsotpFlowControl.h"
 
 class DecodersTest : public QObject
 {
     Q_OBJECT
 
 private slots:
+    void isotpFlowControl();
+    void udsPendingFrameIsVisible();
     // --- UDS ---
     void udsSingleFrame();
     void udsMultiFrame();
@@ -67,6 +70,95 @@ private slots:
     void protocolManagerDecodesGenuineRxMultiFrame();
     void protocolManagerKeepsSessionsSeparatePerChannel();
 };
+
+void DecodersTest::isotpFlowControl()
+{
+    IsotpFlowControl transport;
+    const auto now = IsotpFlowControl::Clock::now();
+    BusMessage request(0x7E0);
+    request.setRX(false);
+    request.setInterfaceId(1);
+    request.setLength(8);
+    request.setData(0x03, 0x22, 0xF1, 0x87, 0, 0, 0, 0);
+    BusMessage ff(0x7E8);
+    ff.setRX(true);
+    ff.setInterfaceId(1);
+    ff.setLength(8);
+    ff.setData(0x10, 0x0C, 0x62, 0xF1, 0x87, 0xDE, 0xAD, 0xAD);
+    QVERIFY(!transport.process(ff, now)); // Passive observer must stay silent.
+    QVERIFY(!transport.process(request, now));
+    auto otherChannel = ff;
+    otherChannel.setInterfaceId(2);
+    QVERIFY(!transport.process(otherChannel, now));
+    auto loopback = ff;
+    loopback.setRX(false);
+    QVERIFY(!transport.process(loopback, now));
+    auto unrelated = ff;
+    unrelated.setByte(2, 0x6E);
+    QVERIFY(!transport.process(unrelated, now));
+    auto invalid = ff;
+    invalid.setByte(1, 7);
+    QVERIFY(!transport.process(invalid, now));
+    invalid = ff;
+    invalid.setRTR(true);
+    QVERIFY(!transport.process(invalid, now));
+    auto fc = transport.process(ff, now);
+    QVERIFY(fc.has_value());
+    QCOMPARE(fc->getId(), 0x7E0u);
+    QCOMPARE(fc->getInterfaceId(), request.getInterfaceId());
+    QVERIFY(!fc->isRX());
+    QCOMPARE(fc->getLength(), uint8_t(8));
+    QCOMPARE(QByteArray(reinterpret_cast<const char *>(fc->getData()), 8),
+             QByteArray::fromHex("3000000000000000"));
+    QVERIFY(!transport.process(ff, now)); // Duplicate FF cannot send a second FC.
+    transport.process(request, now);
+    QVERIFY(!transport.process(ff, now + std::chrono::seconds(6)));
+
+    transport.process(request, now);
+    BusMessage pending(0x7E8);
+    pending.setInterfaceId(1);
+    pending.setRX(true);
+    pending.setLength(8);
+    pending.setData(3, 0x7F, 0x22, 0x78, 0, 0, 0, 0);
+    QVERIFY(!transport.process(pending, now + std::chrono::seconds(4)));
+    QVERIFY(transport.process(ff, now + std::chrono::seconds(6)));
+
+    transport.process(request, now);
+    pending.setData(3, 0x62, 0xF1, 0x87, 0, 0, 0, 0);
+    QVERIFY(!transport.process(pending, now));
+    QVERIFY(!transport.process(ff, now));
+
+    request.setExtended(true);
+    request.setId(0x18DA10F1);
+    ff.setExtended(true);
+    ff.setId(0x18DAF110);
+    transport.process(request, now);
+    fc = transport.process(ff, now);
+    QVERIFY(fc.has_value());
+    QVERIFY(fc->isExtended());
+    QCOMPARE(fc->getId(), 0x18DA10F1u);
+}
+
+void DecodersTest::udsPendingFrameIsVisible()
+{
+    ProtocolManager manager;
+    ProtocolMessage out;
+    BusMessage ff(0x7E8);
+    ff.setRX(true);
+    ff.setLength(8);
+    ff.setData(0x10, 0x0C, 0x62, 0xF1, 0x87, 0xDE, 0xAD, 0xAD);
+    QCOMPARE(manager.processFrame(ff, out), DecodeStatus::Consumed);
+    QCOMPARE(out.protocol, QString("uds"));
+    BusMessage cf(0x7E8);
+    cf.setRX(true);
+    cf.setLength(8);
+    cf.setData(0x21, 1, 2, 3, 4, 5, 6, 0);
+    QCOMPARE(manager.processFrame(cf, out), DecodeStatus::Completed);
+    QCOMPARE(out.payload, QByteArray::fromHex("62F187DEADAD010203040506"));
+    QCOMPARE(out.rawFrames.size(), 2);
+    ff.setByte(1, 5); // Invalid FF length cannot open a session.
+    QCOMPARE(manager.processFrame(ff, out), DecodeStatus::Ignored);
+}
 
 // Original DecoderTest case: 0x02 0x10 0x01 -> DiagnosticSessionControl.
 void DecodersTest::udsSingleFrame()

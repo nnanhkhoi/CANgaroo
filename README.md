@@ -114,7 +114,17 @@ sudo udevadm control --reload-rules && sudo udevadm trigger
 
 For a local MSYS2 MINGW64 toolchain, `powershell -ExecutionPolicy Bypass -File scripts/build-windows.ps1`
 builds and packages a portable app at `bin/CANgaroo-Windows/cangaroo.exe`.
-The script defaults to `build/toolchain/msys64`; use `-MsysRoot C:/msys64` for an existing installation.
+The script detects MSYS2 in `build/toolchain/msys64`, then `C:/msys64`, then via
+`qmake6.exe` on PATH. Use `-MsysRoot C:/path/to/msys64` to select an installation.
+Add `-RunTests` to build and run the unit tests before packaging (requires Qt Test),
+and `-Jobs 8` to set the number of parallel build jobs:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/build-windows.ps1 -RunTests -Jobs 8
+```
+
+The portable folder also includes `isotp.md` describing automatic Flow Control
+and the supported diagnostic address mappings.
 Required packages are listed at the top of the script.
 
 #### Deployment

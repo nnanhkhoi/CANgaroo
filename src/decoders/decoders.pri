@@ -4,6 +4,7 @@ SOURCES += \
     $$PWD/J1939Decoder.cpp
 
 HEADERS += \
+    $$PWD/IsotpFlowControl.h \
     $$PWD/ProtocolTypes.h \
     $$PWD/IDecoder.h \
     $$PWD/ProtocolManager.h \

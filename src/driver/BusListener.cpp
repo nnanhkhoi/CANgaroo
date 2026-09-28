@@ -28,6 +28,7 @@
 #include "core/Backend.h"
 #include "core/BusMessage.h"
 #include "core/BusTrace.h"
+#include "decoders/IsotpFlowControl.h"
 
 BusListener::BusListener(QObject *parent, Backend &backend, BusInterface &intf)
   : QObject(parent),
@@ -60,6 +61,7 @@ void BusListener::run()
     //BusMessage msg;
     QList<BusMessage> rxMessages;
     BusTrace *trace = _backend.getTrace();
+    IsotpFlowControl flowControl;
 
     _intf.open();
 
@@ -75,6 +77,8 @@ void BusListener::run()
                 if (msg.busType() == BusType::LIN)
                     _intf.addFrameBits(msg);
                 trace->enqueueMessage(msg, false);
+                if (auto fc = flowControl.process(msg))
+                    _intf.sendMessage(*fc);
             }
             rxMessages.clear();
         }

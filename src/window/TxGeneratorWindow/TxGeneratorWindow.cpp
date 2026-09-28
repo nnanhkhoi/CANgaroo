@@ -111,6 +111,10 @@ TxGeneratorWindow::TxGeneratorWindow(QWidget *parent, Backend &backend) :
     });
 
     ui->treeActive->setSelectionMode(QAbstractItemView::ExtendedSelection);
+    // Requests are a flat list; tree indentation steals space from the
+    // embedded Send Once button in the first column.
+    ui->treeActive->setRootIsDecorated(false);
+    ui->treeActive->setIndentation(0);
     ui->treeAvailable->setSelectionMode(QAbstractItemView::ExtendedSelection);
     ui->btnAddToList->setEnabled(false);
 
@@ -815,6 +819,9 @@ void TxGeneratorWindow::updateActiveList()
         btnSend->setToolTip(tr("Send only this request once. Does not start or stop cyclic transmission. Start measurement first."));
         connect(btnSend, &QPushButton::clicked, this, [this, i]() { sendOnce(i); });
         ui->treeActive->setItemWidget(item, SendColumn, btnSend);
+        btnSend->ensurePolished();
+        btnSend->setMinimumSize(btnSend->sizeHint());
+        item->setSizeHint(SendColumn, btnSend->sizeHint());
 
         auto *btnStatus = new QPushButton();
         btnStatus->setProperty("row", i);

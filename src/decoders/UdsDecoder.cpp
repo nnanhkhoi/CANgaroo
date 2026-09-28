@@ -104,6 +104,8 @@ DecodeStatus UdsDecoder::tryDecode(const BusMessage& frame, ProtocolMessage& out
             return DecodeStatus::Completed;
         }
     } else if (type == 1) { // First Frame
+        if (frame.getLength() < 3)
+            return DecodeStatus::Ignored;
         int size       = ((frame.getByte(0) & 0x0F) << 8) | frame.getByte(1);
         int dataOffset = 2;
 
@@ -117,7 +119,7 @@ DecodeStatus UdsDecoder::tryDecode(const BusMessage& frame, ProtocolMessage& out
         }
 
         // Require at least the SID byte to be present before opening a session.
-        if (dataOffset >= frame.getLength())
+        if (dataOffset >= frame.getLength() || size <= frame.getLength() - dataOffset)
             return DecodeStatus::Ignored;
 
         if (!isValidUdsSid(frame.getByte(dataOffset)))
@@ -131,6 +133,7 @@ DecodeStatus UdsDecoder::tryDecode(const BusMessage& frame, ProtocolMessage& out
         session.nextSn       = 1;
         session.frames       = {frame};
         session.rxId         = id;
+        outMsg.protocol = "uds";
         return DecodeStatus::Consumed;
 
     } else if (type == 2) { // Consecutive Frame
@@ -167,6 +170,7 @@ DecodeStatus UdsDecoder::tryDecode(const BusMessage& frame, ProtocolMessage& out
                     m_sessions.remove(key);
                     return DecodeStatus::Completed;
                 }
+                outMsg.protocol = "uds";
                 return DecodeStatus::Consumed;
             } else {
                 m_sessions.remove(key);
