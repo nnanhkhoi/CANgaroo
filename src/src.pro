@@ -51,7 +51,7 @@ include($$PWD/helpers/helpers.pri)
 
 PKGCONFIG += python3-embed
 unix:INCLUDEPATH += /usr/include/pybind11
-win32:INCLUDEPATH += $$system(python3 -c "import pybind11; print(pybind11.get_include())")
+win32:PKGCONFIG += pybind11
 
 unix:PKGCONFIG += libnl-3.0
 unix:PKGCONFIG += libnl-route-3.0

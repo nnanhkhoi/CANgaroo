@@ -416,6 +416,10 @@ void RawTxWindow::setMessage(const BusMessage &msg, const QString &name, BusInte
             }
         }
     }
+    // An unavailable saved interface must not appear to select another adapter.
+    // Starting at -1 also lets selecting the only available adapter emit a change.
+    _comboInterface->setPlaceholderText(tr("Select interface..."));
+    _comboInterface->setCurrentIndex(-1);
     for (int i = 0; i < _comboInterface->count(); ++i) {
         if (static_cast<BusInterfaceId>(_comboInterface->itemData(i).toUInt()) == interfaceId) {
             _comboInterface->setCurrentIndex(i);
@@ -427,7 +431,8 @@ void RawTxWindow::setMessage(const BusMessage &msg, const QString &name, BusInte
     // Determine capabilities from interface
     BusInterface *intf = _backend.getInterfaceById(interfaceId);
     bool canfd = intf && (intf->getCapabilities() & BusInterface::capability_canfd);
-    populateDlcCombo(canfd);
+    // Keep an existing FD frame editable even while its adapter is unavailable.
+    populateDlcCombo(canfd || msg.isFD() || msg.getLength() > 8);
 
     _cbFD->setEnabled(canfd);
     _cbBRS->setEnabled(canfd && msg.isFD());
@@ -440,16 +445,9 @@ void RawTxWindow::setMessage(const BusMessage &msg, const QString &name, BusInte
 
     if (dbMsg) {
         isExtended = (dbMsg->getRaw_id() & 0x80000000) != 0;
-        int dlcCode = dbMsg->getDlc();
-        if (dlcCode <= 8) {
-            dlc = dlcCode;
-        } else {
-            isFD = true;
-            static const int dlcToLen[] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 12, 16, 20, 24, 32, 48, 64};
-            if (dlcCode < 16) {
-                dlc = dlcToLen[dlcCode];
-            }
-        }
+        // BO_ stores a payload length in bytes, not the CAN FD wire DLC code.
+        dlc = dbMsg->getDlc();
+        isFD = isFD || dlc > 8;
     }
 
     _editId->setText(QString("%1").arg(msg.getId(), 0, 16).toUpper());

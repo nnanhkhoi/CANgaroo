@@ -91,12 +91,15 @@ private slots:
 private:
     Ui::TxGeneratorWindow *ui;
     Backend &_backend;
-    QTimer *_sendTimer;
-    BitMatrixWidget *_bitMatrixWidget;
+    QTimer *_sendTimer = nullptr;
+    BitMatrixWidget *_bitMatrixWidget = nullptr;
     class QPushButton *_btnRandomPayload;
 
     /// Monotonic clock for the TX schedule; unaffected by wall-clock (NTP) steps.
     using TxClock = std::chrono::steady_clock;
+
+    enum ActiveColumn { SendColumn, CyclicColumn, IdColumn, NameColumn,
+                        DataColumn, InterfaceColumn, LengthColumn, IntervalColumn };
 
     struct CyclicMessage {
         BusMessage msg;
@@ -108,12 +111,12 @@ private:
         TxClock::time_point nextDue;
         BusInterfaceId interfaceId;
         CanDbMessage *dbMsg;
+        bool usesDbMessage = false;
         QString interfaceName; ///< Display name saved to XML; resolved to interfaceId by resolveInterfaceNames()
     };
 
     QList<CyclicMessage> _cyclicMessages;
 
-    bool isLoading;
     void updateAvailableList();
     void updateActiveList();
     void updateRowUI(int row);
@@ -121,9 +124,8 @@ private:
     // Matches each CyclicMessage::interfaceName against the combo box and
     // sets interfaceId accordingly. Called after the combo box is repopulated.
     void resolveInterfaceNames();
-    // Re-links each CyclicMessage without a dbMsg to its CanDbMessage by raw CAN
-    // ID, via the setup's message cache. Needed after loadXML(), since dbMsg is
-    // a runtime pointer that isn't (and can't be) persisted to the project file.
+    // Re-links DBC requests after setup changes. Manual requests keep their own
+    // frame settings even when a DBC contains the same CAN ID.
     void resolveDbMessages();
     /// Arms the single-shot send timer for the earliest pending deadline, or
     /// stops it when nothing is due.
@@ -133,5 +135,8 @@ private:
     void setInterval(int row, int interval_ms);
     /// Enables/disables a row, restarting its schedule on the off->on edge.
     void setEnabled(int row, bool enabled);
+    /// Sends exactly one frame without changing the cyclic schedule.
+    void sendOnce(int row);
+    void updateSendControls();
 };
 

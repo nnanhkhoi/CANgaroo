@@ -31,6 +31,12 @@
 #include <QVBoxLayout>
 #include <QDialogButtonBox>
 #include <QComboBox>
+#include <QFormLayout>
+#include <QFontDatabase>
+#include <QLineEdit>
+#include <QMessageBox>
+#include <QRegularExpressionValidator>
+#include <QSignalBlocker>
 #include "core/Backend.h"
 #include "core/MeasurementNetwork.h"
 #include "core/MeasurementSetup.h"
@@ -38,7 +44,6 @@
 #include "driver/BusInterface.h"
 #include "driver/CanDriver.h"
 #include "window/RawTxWindow/RawTxWindow.h"
-#include <chrono>
 
 TxGeneratorWindow::TxGeneratorWindow(QWidget *parent, Backend &backend) :
     ConfigurableWidget(parent),
@@ -52,6 +57,8 @@ TxGeneratorWindow::TxGeneratorWindow(QWidget *parent, Backend &backend) :
     // minimumSizeHint blocks shrinkage even after the window minimum is relaxed).
     ui->treeAvailable->setMinimumHeight(0);
     ui->treeActive->setMinimumHeight(0);
+    ui->splitter->setStretchFactor(0, 1);
+    ui->splitter->setStretchFactor(1, 2);
 
     // Deadline-driven scheduler: instead of polling, the timer is re-armed after
     // every pass for the earliest pending send deadline. That wakes the event loop
@@ -70,17 +77,11 @@ TxGeneratorWindow::TxGeneratorWindow(QWidget *parent, Backend &backend) :
     connect(&backend, &Backend::endMeasurement, this, &TxGeneratorWindow::refreshInterfaces);
     connect(&backend, &Backend::endMeasurement, this, &TxGeneratorWindow::updateMeasurementState);
 
-    connect(ui->btnBulkRun, &QPushButton::clicked, this, &TxGeneratorWindow::on_btnBulkRun_clicked);
-    connect(ui->btnBulkStop, &QPushButton::clicked, this, &TxGeneratorWindow::on_btnBulkStop_clicked);
-
     // Initial styling
     ui->btnBulkRun->setStyleSheet("QPushButton { font-weight: bold; background: #218838; color: white; border-radius: 4px; padding: 4px 8px; } QPushButton:hover { background: #28a745; } QPushButton:pressed { background: #196b2c; } QPushButton:disabled { background: #94d3a2; }");
     ui->btnBulkStop->setStyleSheet("QPushButton { font-weight: bold; background: #c82333; color: white; border-radius: 4px; padding: 4px 8px; } QPushButton:hover { background: #dc3545; } QPushButton:pressed { background: #a71d2a; } QPushButton:disabled { background: #f1aeb5; }");
 
-    connect(ui->treeActive, &QTreeWidget::itemChanged, this, &TxGeneratorWindow::on_treeActive_itemChanged);
     connect(ui->treeActive, &QTreeWidget::itemDoubleClicked, this, &TxGeneratorWindow::treeActiveItemDoubleClicked);
-
-    connect(ui->treeAvailable, &QTreeWidget::itemSelectionChanged, this, &TxGeneratorWindow::on_treeAvailable_itemSelectionChanged);
 
     _bitMatrixWidget = new BitMatrixWidget(this);
     // REMOVED redundant addWidget to verticalLayoutTabLayout
@@ -113,14 +114,14 @@ TxGeneratorWindow::TxGeneratorWindow(QWidget *parent, Backend &backend) :
     ui->treeAvailable->setSelectionMode(QAbstractItemView::ExtendedSelection);
     ui->btnAddToList->setEnabled(false);
 
-    // Fit columns to content; let Name column stretch
-    ui->treeActive->header()->setSectionResizeMode(0, QHeaderView::Fixed); // Status
-    ui->treeActive->header()->resizeSection(0, 75);
-    ui->treeActive->header()->setSectionResizeMode(1, QHeaderView::ResizeToContents); // ID
-    ui->treeActive->header()->setSectionResizeMode(2, QHeaderView::Stretch);           // Name
-    ui->treeActive->header()->setSectionResizeMode(3, QHeaderView::ResizeToContents); // Interface
-    ui->treeActive->header()->setSectionResizeMode(4, QHeaderView::ResizeToContents); // DLC
-    ui->treeActive->header()->setSectionResizeMode(5, QHeaderView::ResizeToContents); // Interval
+    auto *header = ui->treeActive->header();
+    header->setStretchLastSection(false);
+    header->setSectionResizeMode(QHeaderView::ResizeToContents);
+    header->setSectionResizeMode(NameColumn, QHeaderView::Interactive);
+    header->resizeSection(NameColumn, 160);
+    header->setSectionResizeMode(DataColumn, QHeaderView::Interactive);
+    header->resizeSection(DataColumn, 230);
+    ui->treeActive->setToolTip(tr("Double-click a request to edit its name, ID, interface or payload."));
 
     // Add Random Payload button programmatically
     _btnRandomPayload = new QPushButton(tr("Randomize Data"), this);
@@ -135,7 +136,6 @@ TxGeneratorWindow::TxGeneratorWindow(QWidget *parent, Backend &backend) :
     updateMeasurementState();
     populateDbcMessages();
     updateActiveList();
-    isLoading = false;
 }
 
 TxGeneratorWindow::~TxGeneratorWindow()
@@ -146,6 +146,8 @@ TxGeneratorWindow::~TxGeneratorWindow()
 void TxGeneratorWindow::retranslateUi()
 {
     ui->retranslateUi(this);
+    _btnRandomPayload->setText(tr("Randomize Data"));
+    updateActiveList();
 }
 
 bool TxGeneratorWindow::saveXML(Backend &backend, QDomDocument &xml, QDomElement &root)
@@ -157,7 +159,7 @@ bool TxGeneratorWindow::saveXML(Backend &backend, QDomDocument &xml, QDomElement
     for (const CyclicMessage &cm : _cyclicMessages)
     {
         // Resolve the display name of the selected interface from the combo box.
-        QString ifName;
+        QString ifName = cm.interfaceName;
         for (int i = 0; i < ui->comboBoxInterface->count(); i++)
         {
             if (static_cast<BusInterfaceId>(ui->comboBoxInterface->itemData(i).toUInt()) == cm.interfaceId)
@@ -178,10 +180,12 @@ bool TxGeneratorWindow::saveXML(Backend &backend, QDomDocument &xml, QDomElement
         QDomElement frameEl = xml.createElement("frame");
         frameEl.setAttribute("id",       QString("0x%1").arg(cm.msg.getId(), 0, 16).toUpper());
         frameEl.setAttribute("name",     cm.name);
+        frameEl.setAttribute("dbc",      cm.usesDbMessage ? 1 : 0);
         frameEl.setAttribute("dlc",      cm.msg.getLength());
         frameEl.setAttribute("extended", cm.msg.isExtended() ? 1 : 0);
         frameEl.setAttribute("fd",       cm.msg.isFD()       ? 1 : 0);
         frameEl.setAttribute("brs",      cm.msg.isBRS()      ? 1 : 0);
+        frameEl.setAttribute("rtr",      cm.msg.isRTR()      ? 1 : 0);
         frameEl.setAttribute("interval", cm.interval);
         frameEl.setAttribute("interface", ifName);
         frameEl.setAttribute("data",     dataStr);
@@ -200,6 +204,7 @@ bool TxGeneratorWindow::loadXML(Backend &backend, QDomElement &el)
         ui->splitter->restoreState(QByteArray::fromBase64(splitterState.toLatin1()));
     }
 
+    _sendTimer->stop();
     _cyclicMessages.clear();
 
     QDomNodeList frames = el.elementsByTagName("frame");
@@ -209,16 +214,20 @@ bool TxGeneratorWindow::loadXML(Backend &backend, QDomElement &el)
 
         CyclicMessage cm;
         cm.msg.setId(frameEl.attribute("id").toUInt(nullptr, 16));
-        const int dlc = frameEl.attribute("dlc").toInt();
+        const int dlc = std::clamp(frameEl.attribute("dlc").toInt(), 0, BusMessage::k_maxDataBytes);
         cm.msg.setLength(static_cast<uint8_t>(dlc));
         cm.msg.setExtended(frameEl.attribute("extended").toInt() != 0);
         cm.msg.setFD(      frameEl.attribute("fd").toInt()       != 0);
         cm.msg.setBRS(     frameEl.attribute("brs").toInt()      != 0);
+        cm.msg.setRTR(     frameEl.attribute("rtr").toInt()      != 0);
         cm.name          = frameEl.attribute("name");
-        cm.interval      = frameEl.attribute("interval", "100").toInt();
+        // Older projects used the fixed name "Manual" for every manual frame.
+        cm.usesDbMessage = frameEl.attribute("dbc", cm.name == "Manual" ? "0" : "1").toInt() != 0;
+        cm.interval      = std::clamp(frameEl.attribute("interval", "100").toInt(),
+                                     ui->spinInterval->minimum(), ui->spinInterval->maximum());
         cm.enabled       = false; // Never auto-start on load
         cm.nextDue       = {};
-        cm.interfaceId   = 0;
+        cm.interfaceId   = InvalidBusInterfaceId;
         cm.dbMsg         = nullptr;
         cm.interfaceName = frameEl.attribute("interface");
 
@@ -250,6 +259,7 @@ void TxGeneratorWindow::resolveInterfaceNames()
     for (CyclicMessage &cm : _cyclicMessages)
     {
         if (cm.interfaceName.isEmpty()) { continue; }
+        cm.interfaceId = InvalidBusInterfaceId;
         for (int i = 0; i < ui->comboBoxInterface->count(); i++)
         {
             if (ui->comboBoxInterface->itemText(i) == cm.interfaceName)
@@ -266,13 +276,14 @@ void TxGeneratorWindow::resolveDbMessages()
     MeasurementSetup &setup = _backend.getSetup();
     for (CyclicMessage &cm : _cyclicMessages)
     {
-        if (cm.dbMsg) { continue; }
-        cm.dbMsg = setup.findDbMessage(cm.msg);
+        cm.msg.setInterfaceId(cm.interfaceId);
+        cm.dbMsg = cm.usesDbMessage ? setup.findDbMessage(cm.msg) : nullptr;
     }
 }
 
 void TxGeneratorWindow::refreshInterfaces()
 {
+    const QString previousInterface = ui->comboBoxInterface->currentText();
     ui->comboBoxInterface->blockSignals(true);
     ui->comboBoxInterface->clear();
 
@@ -290,6 +301,8 @@ void TxGeneratorWindow::refreshInterfaces()
     if (ui->comboBoxInterface->count() > 0 && ui->comboBoxInterface->currentIndex() == -1) {
         ui->comboBoxInterface->setCurrentIndex(0);
     }
+    const int previousIndex = ui->comboBoxInterface->findText(previousInterface);
+    if (previousIndex >= 0) { ui->comboBoxInterface->setCurrentIndex(previousIndex); }
     ui->comboBoxInterface->blockSignals(false);
 
     // Re-resolve interface names in case frames were loaded before the setup existed.
@@ -297,6 +310,7 @@ void TxGeneratorWindow::refreshInterfaces()
     // Re-resolve dbMsg links in case frames were loaded before the DBCs existed.
     resolveDbMessages();
     populateDbcMessages();
+    updateActiveList();
 }
 
 void TxGeneratorWindow::populateDbcMessages()
@@ -394,12 +408,16 @@ void TxGeneratorWindow::on_btnAddToList_released()
         cm.msg.setId(dbMsg->getRaw_id());
         cm.msg.setLength(dbMsg->getDlc());
         cm.msg.setExtended(dbMsg->getRaw_id() > 0x7FF);
+        cm.msg.setFD(dbMsg->getDlc() > 8);
         cm.name = dbMsg->getName();
         cm.interval = 100;
         cm.enabled = false;
         cm.nextDue = {};
-        cm.interfaceId = static_cast<BusInterfaceId>(ui->comboBoxInterface->currentData().toUInt());
+        cm.interfaceId = ui->comboBoxInterface->currentIndex() >= 0
+            ? static_cast<BusInterfaceId>(ui->comboBoxInterface->currentData().toUInt()) : InvalidBusInterfaceId;
         cm.dbMsg = dbMsg;
+        cm.usesDbMessage = true;
+        cm.interfaceName = ui->comboBoxInterface->currentText();
 
         _cyclicMessages.append(cm);
     }
@@ -411,7 +429,11 @@ void TxGeneratorWindow::on_btnAddManual_released()
 {
     bool ok;
     uint32_t id = ui->lineManualId->text().toUInt(&ok, 16);
-    if (!ok) return;
+    if (!ok || id > 0x1FFFFFFF) {
+        QMessageBox::warning(this, tr("Invalid CAN ID"), tr("Enter a hexadecimal CAN ID from 0 to 1FFFFFFF."));
+        ui->lineManualId->setFocus();
+        return;
+    }
 
     CyclicMessage cm;
     cm.msg = BusMessage(); // Ensure fresh instance
@@ -419,15 +441,20 @@ void TxGeneratorWindow::on_btnAddManual_released()
     cm.msg.setLength(ui->spinManualDlc->value());
     cm.msg.setExtended(id > 0x7FF || ui->lineManualId->text().length() > 3);
     cm.msg.setFD(ui->spinManualDlc->value() > 8);
-    cm.name = "Manual";
+    cm.name = ui->lineManualName->text().trimmed();
+    if (cm.name.isEmpty()) { cm.name = tr("Manual"); }
     cm.interval = ui->spinInterval->value();
     cm.enabled = false;
     cm.nextDue = {};
-    cm.interfaceId = static_cast<BusInterfaceId>(ui->comboBoxInterface->currentData().toUInt());
+    cm.interfaceId = ui->comboBoxInterface->currentIndex() >= 0
+        ? static_cast<BusInterfaceId>(ui->comboBoxInterface->currentData().toUInt()) : InvalidBusInterfaceId;
     cm.dbMsg = nullptr;
+    cm.interfaceName = ui->comboBoxInterface->currentText();
 
     _cyclicMessages.append(cm);
     updateActiveList();
+    ui->treeActive->setCurrentItem(ui->treeActive->topLevelItem(_cyclicMessages.size() - 1),
+                                  NameColumn, QItemSelectionModel::ClearAndSelect);
     ui->treeActive->scrollToBottom();
 }
 
@@ -443,6 +470,8 @@ void TxGeneratorWindow::on_btnRemove_released()
         if (row >= 0) rows.append(row);
     }
     std::sort(rows.begin(), rows.end(), std::greater<int>());
+    ui->treeActive->clearSelection();
+    ui->treeActive->setCurrentItem(nullptr);
 
     for (auto row : rows) {
         if (row >= 0 && row < _cyclicMessages.size()) {
@@ -450,37 +479,41 @@ void TxGeneratorWindow::on_btnRemove_released()
         }
     }
     updateActiveList();
+    updateSendTimer();
 }
 
 void TxGeneratorWindow::on_btnSendOnce_released()
 {
-    QList<QTreeWidgetItem*> selected = ui->treeActive->selectedItems();
-    if (selected.isEmpty()) {
-        int row = ui->treeActive->currentIndex().row();
-        if (row >= 0 && row < _cyclicMessages.size()) {
-            selected.append(ui->treeActive->currentItem());
-        }
+    for (auto *item : ui->treeActive->selectedItems()) {
+        sendOnce(ui->treeActive->indexOfTopLevelItem(item));
     }
+}
 
-    for (auto *item : selected) {
-        int row = ui->treeActive->indexOfTopLevelItem(item);
-        if (row >= 0 && row < _cyclicMessages.size()) {
-            CyclicMessage &cm = _cyclicMessages[row];
-            BusInterface *intf = _backend.getInterfaceById(cm.interfaceId);
-            if (intf && intf->isOpen()) {
-                cm.msg.setInterfaceId(cm.interfaceId);
-                intf->sendMessage(cm.msg);
-                /*BusMessage loopback = cm.msg;
-                loopback.setRX(false);
-                auto now = std::chrono::system_clock::now().time_since_epoch();
-                loopback.setTimestamp_us(std::chrono::duration_cast<std::chrono::microseconds>(now).count());
-                emit loopbackFrame(loopback);*/
-            } else {
-                QString errorMsg = QString("TxGeneratorWindow: Interface %1 is not open.").arg(intf ? intf->getName() : QString::number(cm.interfaceId));
-                log_error(errorMsg);
-            }
-        }
+void TxGeneratorWindow::sendOnce(int row)
+{
+    if (!_backend.isMeasurementRunning() || row < 0 || row >= _cyclicMessages.size()) { return; }
+    const CyclicMessage &cm = _cyclicMessages[row];
+    BusInterface *intf = _backend.getInterfaceById(cm.interfaceId);
+    if (!intf || !intf->isOpen()) {
+        const QString error = tr("Cannot send request \"%1\": interface %2 is not open.")
+            .arg(cm.name, intf ? intf->getName() : cm.interfaceName);
+        log_error(error);
+        QMessageBox::warning(this, tr("Send Once"), error);
+        return;
     }
+    BusMessage msg = cm.msg;
+    msg.setInterfaceId(cm.interfaceId);
+    msg.setRX(false);
+    intf->sendMessage(msg);
+}
+
+void TxGeneratorWindow::updateSendControls()
+{
+    const bool selected = !ui->treeActive->selectedItems().isEmpty();
+    ui->btnSendOnce->setEnabled(_backend.isMeasurementRunning() && selected);
+    ui->btnBulkRun->setEnabled(_backend.isMeasurementRunning() && selected);
+    ui->btnBulkStop->setEnabled(selected);
+    _btnRandomPayload->setEnabled(selected);
 }
 
 void TxGeneratorWindow::on_btnBulkRun_clicked()
@@ -531,18 +564,10 @@ void TxGeneratorWindow::on_btnBulkStop_clicked()
 
 void TxGeneratorWindow::on_spinInterval_valueChanged(int i)
 {
-    QList<QTreeWidgetItem*> selected = ui->treeActive->selectedItems();
-    if (selected.isEmpty()) {
-        int row = ui->treeActive->currentIndex().row();
+    for (auto *item : ui->treeActive->selectedItems()) {
+        int row = ui->treeActive->indexOfTopLevelItem(item);
         if (row >= 0 && row < _cyclicMessages.size()) {
             setInterval(row, i);
-        }
-    } else {
-        for (auto *item : selected) {
-            int row = ui->treeActive->indexOfTopLevelItem(item);
-            if (row >= 0 && row < _cyclicMessages.size()) {
-                setInterval(row, i);
-            }
         }
     }
     updateSendTimer();
@@ -564,7 +589,6 @@ void TxGeneratorWindow::on_treeAvailable_itemDoubleClicked(QTreeWidgetItem *item
 
 void TxGeneratorWindow::on_treeActive_itemSelectionChanged()
 {
-    isLoading = true;
     QList<QTreeWidgetItem*> selected = ui->treeActive->selectedItems();
     if (!selected.isEmpty()) {
         int row = ui->treeActive->indexOfTopLevelItem(selected.first());
@@ -584,25 +608,8 @@ void TxGeneratorWindow::on_treeActive_itemSelectionChanged()
 
 
         }
-    } else {
-        int row = ui->treeActive->currentIndex().row();
-        if (row >= 0 && row < _cyclicMessages.size()) {
-            const CyclicMessage &cm = _cyclicMessages[row];
-            ui->btnBulkRun->blockSignals(true);
-            ui->btnBulkStop->blockSignals(true);
-            ui->btnBulkRun->setChecked(cm.enabled);
-            ui->btnBulkStop->setChecked(!cm.enabled);
-            ui->btnBulkRun->blockSignals(false);
-            ui->btnBulkStop->blockSignals(false);
-
-            ui->spinInterval->blockSignals(true);
-            ui->spinInterval->setValue(cm.interval);
-            ui->spinInterval->blockSignals(false);
-
-
-        }
     }
-    isLoading = false;
+    updateSendControls();
 }
 
 void TxGeneratorWindow::treeActiveItemDoubleClicked(QTreeWidgetItem *item, int column)
@@ -614,10 +621,15 @@ void TxGeneratorWindow::treeActiveItemDoubleClicked(QTreeWidgetItem *item, int c
     CyclicMessage &cm = _cyclicMessages[row];
 
     QDialog dlg(this);
-    dlg.setWindowTitle(tr("Edit Message: %1 - %2").arg(item->text(1), cm.name));
+    dlg.setWindowTitle(tr("Edit Message: %1 - %2").arg(item->text(IdColumn), cm.name));
     dlg.resize(750, 480);
 
     auto *layout = new QVBoxLayout(&dlg);
+    auto *nameLayout = new QFormLayout();
+    auto *editName = new QLineEdit(cm.name, &dlg);
+    editName->setObjectName("editRequestName");
+    nameLayout->addRow(tr("Request name:"), editName);
+    layout->addLayout(nameLayout);
     auto *rawTx = new RawTxWindow(&dlg, _backend);
     rawTx->setMessage(cm.msg, cm.name, cm.interfaceId, cm.dbMsg);
     layout->addWidget(rawTx);
@@ -647,8 +659,11 @@ void TxGeneratorWindow::treeActiveItemDoubleClicked(QTreeWidgetItem *item, int c
     if (dlg.exec() == QDialog::Accepted)
     {
         cm.msg           = editedMsg;
+        cm.name          = editName->text().trimmed();
+        if (cm.name.isEmpty()) { cm.name = tr("Manual"); }
         cm.interfaceId   = editedInterfaceId;
         cm.interfaceName = editedInterfaceName;
+        resolveDbMessages();
         updateRowUI(row);
     }
 }
@@ -657,9 +672,9 @@ void TxGeneratorWindow::on_treeActive_itemChanged(QTreeWidgetItem *item, int col
 {
     int row = ui->treeActive->indexOfTopLevelItem(item);
     if (row >= 0 && row < _cyclicMessages.size()) {
-        if (column == 5) {
+        if (column == IntervalColumn) {
             bool ok;
-            int interval = item->text(5).toInt(&ok);
+            int interval = item->text(IntervalColumn).toInt(&ok);
             if (ok && interval > 0 && _cyclicMessages[row].interval != interval) {
                 setInterval(row, interval);
 
@@ -694,9 +709,7 @@ void TxGeneratorWindow::onStatusButtonClicked()
     QPushButton *btn = qobject_cast<QPushButton*>(sender());
     if (!btn) return;
 
-    // Determine the row of the button
-    QPoint pos = btn->parentWidget()->mapTo(ui->treeActive->viewport(), btn->pos());
-    QTreeWidgetItem *item = ui->treeActive->itemAt(pos);
+    QTreeWidgetItem *item = ui->treeActive->topLevelItem(btn->property("row").toInt());
     if (!item) return;
 
     int row = ui->treeActive->indexOfTopLevelItem(item);
@@ -769,8 +782,7 @@ void TxGeneratorWindow::updateMeasurementState()
     // The active list stays editable without a measurement (add, remove, edit,
     // change interval); only actions that put frames on the bus need one.
     bool running = _backend.isMeasurementRunning();
-    ui->btnSendOnce->setEnabled(running);
-    ui->btnBulkRun->setEnabled(running);
+    updateSendControls();
     if (!running) {
         stopAll();
     }
@@ -793,42 +805,32 @@ void TxGeneratorWindow::updateActiveList()
     ui->treeActive->blockSignals(true);
     ui->treeActive->clear();
     for (int i = 0; i < _cyclicMessages.size(); ++i) {
-        const CyclicMessage &cm = _cyclicMessages[i];
         QTreeWidgetItem *item = new QTreeWidgetItem(ui->treeActive);
 
         item->setFlags(item->flags() | Qt::ItemIsEditable);
         item->setFlags(item->flags() & ~Qt::ItemIsUserCheckable); // Explicitly remove checkbox
 
-        // Create Status Button
-        QPushButton *btnStatus = new QPushButton(cm.enabled ? "⏹" : "▶");
-        btnStatus->setToolTip(cm.enabled ? "Stop" : "Start");
-        btnStatus->setFixedWidth(40);
-        if (cm.enabled) {
-            btnStatus->setStyleSheet("QPushButton { color: #dc3545; font-weight: bold; background: transparent; border: 1px solid #dc3545; border-radius: 3px; } QPushButton:hover { background: #dc3545; color: white; }");
-        } else {
-            btnStatus->setStyleSheet("QPushButton { color: #28a745; font-weight: bold; background: transparent; border: 1px solid #28a745; border-radius: 3px; } QPushButton:hover { background: #28a745; color: white; }");
-        }
+        auto *btnSend = new QPushButton(tr("Send Once"));
+        btnSend->setObjectName("btnSendOnceRow");
+        btnSend->setToolTip(tr("Send only this request once. Does not start or stop cyclic transmission. Start measurement first."));
+        connect(btnSend, &QPushButton::clicked, this, [this, i]() { sendOnce(i); });
+        ui->treeActive->setItemWidget(item, SendColumn, btnSend);
 
-        // Starting needs a running measurement; stopping is always allowed.
-        btnStatus->setEnabled(cm.enabled || _backend.isMeasurementRunning());
+        auto *btnStatus = new QPushButton();
+        btnStatus->setProperty("row", i);
         connect(btnStatus, &QPushButton::clicked, this, &TxGeneratorWindow::onStatusButtonClicked);
-        ui->treeActive->setItemWidget(item, 0, btnStatus);
-
-        item->setText(1, "0x" + QString("%1").arg(cm.msg.getId(), 3, 16, QChar('0')).toUpper());
-        item->setText(2, cm.name);
-        BusInterface *intf = _backend.getInterfaceById(cm.interfaceId);
-        item->setText(3, intf ? intf->getName() : "Unknown");
-        item->setText(4, QString::number(cm.msg.getLength()));
-        item->setText(5, QString::number(cm.interval));
+        ui->treeActive->setItemWidget(item, CyclicColumn, btnStatus);
+        updateRowUI(i);
 
         if (selectedRows.contains(i)) {
             item->setSelected(true);
         }
         if (i == currentRow) {
-            ui->treeActive->setCurrentItem(item);
+            ui->treeActive->setCurrentItem(item, NameColumn, QItemSelectionModel::NoUpdate);
         }
     }
     ui->treeActive->blockSignals(false);
+    on_treeActive_itemSelectionChanged();
 }
 
 void TxGeneratorWindow::updateRowUI(int row)
@@ -839,13 +841,14 @@ void TxGeneratorWindow::updateRowUI(int row)
 
     const CyclicMessage &cm = _cyclicMessages[row];
 
-    ui->treeActive->blockSignals(true);
+    const QSignalBlocker blocker(ui->treeActive);
 
-    // Update button in column 0
-    QPushButton *btnStatus = qobject_cast<QPushButton*>(ui->treeActive->itemWidget(item, 0));
+    auto *btnSend = qobject_cast<QPushButton*>(ui->treeActive->itemWidget(item, SendColumn));
+    if (btnSend) { btnSend->setEnabled(_backend.isMeasurementRunning()); }
+    QPushButton *btnStatus = qobject_cast<QPushButton*>(ui->treeActive->itemWidget(item, CyclicColumn));
     if (btnStatus) {
-        btnStatus->setText(cm.enabled ? "⏹" : "▶");
-        btnStatus->setToolTip(cm.enabled ? "Stop" : "Start");
+        btnStatus->setText(cm.enabled ? tr("Stop") : tr("Start"));
+        btnStatus->setToolTip(cm.enabled ? tr("Stop cyclic transmission") : tr("Start cyclic transmission"));
         if (cm.enabled) {
             btnStatus->setStyleSheet("QPushButton { color: #dc3545; font-weight: bold; background: transparent; border: 1px solid #dc3545; border-radius: 3px; } QPushButton:hover { background: #dc3545; color: white; }");
         } else {
@@ -854,19 +857,23 @@ void TxGeneratorWindow::updateRowUI(int row)
         btnStatus->setEnabled(cm.enabled || _backend.isMeasurementRunning());
     }
 
-    item->setText(1, "0x" + QString("%1").arg(cm.msg.getId(), 3, 16, QChar('0')).toUpper());
-    item->setText(2, cm.name);
+    item->setText(IdColumn, "0x" + QString("%1").arg(cm.msg.getId(), 3, 16, QChar('0')).toUpper());
+    item->setText(NameColumn, cm.name);
+    item->setToolTip(NameColumn, cm.name);
+    const QString payload = cm.msg.isRTR() ? tr("RTR (no data)") : cm.msg.getDataHexString().trimmed();
+    item->setText(DataColumn, payload);
+    item->setToolTip(DataColumn, payload);
+    item->setFont(DataColumn, QFontDatabase::systemFont(QFontDatabase::FixedFont));
     BusInterface *intf = _backend.getInterfaceById(cm.interfaceId);
-    item->setText(3, intf ? intf->getName() : "Unknown");
-    item->setText(4, QString::number(cm.msg.getLength()));
-    item->setText(5, QString::number(cm.interval));
-
-    ui->treeActive->blockSignals(false);
+    item->setText(InterfaceColumn, intf ? intf->getName() : tr("Unavailable: %1").arg(cm.interfaceName));
+    item->setText(LengthColumn, QString::number(cm.msg.getLength()));
+    item->setText(IntervalColumn, QString::number(cm.interval));
 }
 
 
 void TxGeneratorWindow::stopAll()
 {
+    _sendTimer->stop();
     for (int i = 0; i < _cyclicMessages.size(); ++i) {
         _cyclicMessages[i].enabled = false;
         updateRowUI(i);

@@ -30,6 +30,7 @@
 *   **Python Scripting**: Built-in script editor with an embedded Python interpreter (via pybind11). Send and receive CAN and LIN messages, decode signals using loaded DBC/LDF files, and automate tasks. Scripts can be started manually or automatically with the measurement. Ready-to-use example scripts are included in the `examples/` directory.
 *   **GPIO Control**: Configure digital lines as inputs or outputs, switch outputs and watch input levels and analog values live on aio_usb and GrIP devices.
 *   **CAN Gateway**: Forward messages between two CAN interfaces with configurable per-message filter rules. Active during a running measurement.
+*   **Named Transmit Requests**: Give manual requests a name, see their hex payload in Generator View, and send a row once with **Send Once**. **Send Selected Once** sends each selected row once; **Start Cyclic** and **Stop Cyclic** control periodic sending separately. Double-click a row to edit its name or payload. Start measurement before sending; newly added and restored requests stay stopped until you choose to transmit.
 *   **LIN Control**: Send LIN Sleep/Wakeup commands, switch schedule tables, and issue LIN diagnostic requests and responses (slave node) on LIN-capable interfaces directly from the UI.
 *   **Trace Replay**: Replay captured CAN logs (Vector ASC, candump, PCAP, and PCAPng formats) with adjustable speed, per-message RX/TX direction filtering, channel mapping to live interfaces, and optional autoplay with the measurement. Supports classic CAN, CAN-FD, RTR, and error frames.
 *   **Multiple Export Formats**: Save traces as Vector ASC, Vector MDF4, Linux candump, PCAP, or PCAPng (Wireshark-compatible).
@@ -110,6 +111,11 @@ sudo udevadm control --reload-rules && sudo udevadm trigger
 * Install [Qt 6](https://www.qt.io/download-qt-installer) (Community / Open Source) including the **Qt Serial Bus** component.
 * Install [Python 3](https://www.python.org/downloads/) and [pybind11](https://github.com/pybind/pybind11) (`pip install pybind11`).
 * Open `cangaroo.pro` in Qt Creator and build.
+
+For a local MSYS2 MINGW64 toolchain, `powershell -ExecutionPolicy Bypass -File scripts/build-windows.ps1`
+builds and packages a portable app at `bin/CANgaroo-Windows/cangaroo.exe`.
+The script defaults to `build/toolchain/msys64`; use `-MsysRoot C:/msys64` for an existing installation.
+Required packages are listed at the top of the script.
 
 #### Deployment
 

@@ -185,6 +185,22 @@
         </widget>
        </item>
        <item>
+        <layout class="QHBoxLayout" name="horizontalLayoutManualName">
+         <item>
+          <widget class="QLabel" name="labelManualName">
+           <property name="text"><string>Request name:</string></property>
+           <property name="buddy"><cstring>lineManualName</cstring></property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QLineEdit" name="lineManualName">
+           <property name="placeholderText"><string>e.g. Read VIN, Tester Present...</string></property>
+           <property name="toolTip"><string>Name for the new manual request; double-click a row to rename it or edit its payload.</string></property>
+          </widget>
+         </item>
+        </layout>
+       </item>
+       <item>
         <layout class="QHBoxLayout" name="horizontalLayoutAvailableControls">
          <item>
           <widget class="QPushButton" name="btnAddToList">
@@ -259,7 +275,7 @@
      </widget>
      <widget class="QGroupBox" name="groupBoxActive">
       <property name="title">
-       <string>Active Cyclic Transmissions</string>
+       <string>Transmit Requests</string>
       </property>
       <layout class="QVBoxLayout" name="verticalLayoutActive">
        <item>
@@ -272,7 +288,12 @@
          </property>
          <column>
           <property name="text">
-           <string>Status</string>
+           <string>Send once</string>
+          </property>
+         </column>
+         <column>
+          <property name="text">
+           <string>Cyclic</string>
           </property>
          </column>
          <column>
@@ -283,6 +304,11 @@
          <column>
           <property name="text">
            <string>Name</string>
+          </property>
+         </column>
+         <column>
+          <property name="text">
+           <string>Data (Hex)</string>
           </property>
          </column>
          <column>
@@ -307,7 +333,7 @@
          <item>
           <widget class="QPushButton" name="btnBulkRun">
            <property name="text">
-            <string>RUN</string>
+            <string>Start Cyclic</string>
            </property>
            <property name="checkable">
             <bool>true</bool>
@@ -317,7 +343,7 @@
          <item>
           <widget class="QPushButton" name="btnBulkStop">
            <property name="text">
-            <string>STOP</string>
+            <string>Stop Cyclic</string>
            </property>
            <property name="checkable">
             <bool>true</bool>
@@ -364,8 +390,9 @@
          <item>
           <widget class="QPushButton" name="btnSendOnce">
            <property name="text">
-            <string>Send</string>
+            <string>Send Selected Once</string>
            </property>
+           <property name="toolTip"><string>Send each selected request once, without starting cyclic transmission. Start measurement first.</string></property>
           </widget>
          </item>
          <item>
